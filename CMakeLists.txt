@@ -71,6 +71,7 @@ install(FILES
   csrc/cpu/saint_cpu.h
   csrc/cpu/sample_cpu.h
   csrc/cpu/spmm_cpu.h
+  csrc/cpu/spmm_cpu_kernel.h
   csrc/cpu/spspmm_cpu.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME}/cpu)
 if(WITH_CUDA)
