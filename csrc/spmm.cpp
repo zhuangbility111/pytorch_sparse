@@ -19,6 +19,7 @@ PyMODINIT_FUNC PyInit__spmm_cpu(void) { return NULL; }
 #endif
 #endif
 
+
 std::tuple<torch::Tensor, torch::optional<torch::Tensor>>
 spmm_fw(torch::Tensor rowptr, torch::Tensor col,
         torch::optional<torch::Tensor> optional_value, torch::Tensor mat,
@@ -109,6 +110,28 @@ public:
 
     return {Variable(), Variable(), Variable(), grad_value,
             Variable(), Variable(), grad_mat,   Variable()};
+  }
+};
+
+// new SPMMSum_without_backward function 
+class SPMMSum_without_backward : public torch::autograd::Function<SPMMSum_without_backward> {
+public:
+  static variable_list forward(AutogradContext *ctx,
+                               Variable rowptr, Variable col, Variable value,
+                               Variable mat, Variable out, bool has_value) {
+
+    torch::optional<torch::Tensor> opt_value = torch::nullopt;
+    if (has_value)
+      opt_value = value;
+
+    // auto out = std::get<0>(spmm_fw(rowptr, col, opt_value, mat, "sum"));
+	// auto out = std::get<0>(spmm_cpu_optimized_no_tile_v1(rowptr, col, opt_value, mat, rowptr.size(0)-1, "sum"));
+	std::get<0>(spmm_cpu_optimized_no_tile_v1(rowptr, col, opt_value, mat, out, rowptr.size(0)-1, "sum"));
+    return {out};
+  }
+
+  static variable_list backward(AutogradContext *ctx, variable_list grad_outs) {
+    return {Variable(), Variable(), Variable(), Variable(), Variable(), Variable()};
   }
 };
 
@@ -313,6 +336,15 @@ SPARSE_API torch::Tensor spmm_sum(torch::optional<torch::Tensor> opt_row,
                         mat, opt_value.has_value())[0];
 }
 
+// new SPMMSum function without backward
+SPARSE_API torch::Tensor spmm_sum_without_backward(
+                       torch::Tensor rowptr, torch::Tensor col,
+                       torch::optional<torch::Tensor> opt_value,
+                       torch::Tensor mat, torch::Tensor out) {
+  auto value = opt_value.has_value() ? opt_value.value() : col;
+  return SPMMSum_without_backward::apply(rowptr, col, value, mat, out, opt_value.has_value())[0];
+}
+
 SPARSE_API torch::Tensor spmm_mean(torch::optional<torch::Tensor> opt_row,
                         torch::Tensor rowptr, torch::Tensor col,
                         torch::optional<torch::Tensor> opt_value,
@@ -343,6 +375,7 @@ spmm_max(torch::Tensor rowptr, torch::Tensor col,
 
 static auto registry = torch::RegisterOperators()
                            .op("torch_sparse::spmm_sum", &spmm_sum)
+                           .op("torch_sparse::spmm_sum_without_backward", &spmm_sum_without_backward) // new SPMM_sum function without backward
                            .op("torch_sparse::spmm_mean", &spmm_mean)
                            .op("torch_sparse::spmm_min", &spmm_min)
                            .op("torch_sparse::spmm_max", &spmm_max);
