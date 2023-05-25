@@ -26,10 +26,43 @@ def spmm_sum(src: SparseTensor, other: torch.Tensor) -> torch.Tensor:
     return torch.ops.torch_sparse.spmm_sum(row, rowptr, col, value, colptr,
                                            csr2csc, other)
 
+# new function to cache the transposed src
+def spmm_sum_with_cached_transposed(src: SparseTensor, other: torch.Tensor) -> torch.Tensor:
+    rowptr, col, value = src.csr()
+
+    row = src.storage._row
+    csr2csc = src.storage._csr2csc
+    colptr = src.storage._colptr
+
+    transposed_row = src.storage._transposed_row
+    transposed_value = src.storage._transposed_value
+
+    if value is not None:
+        value = value.to(other.dtype)
+
+    if value is not None and value.requires_grad:
+        row = src.storage.row()
+
+    if other.requires_grad:
+        row = src.storage.row()
+        csr2csc = src.storage.csr2csc()
+        colptr = src.storage.colptr()
+        if transposed_row is None:
+            src.storage._transposed_row = row.index_select(0, csr2csc)
+            transposed_row = src.storage._transposed_row
+        if value is not None and transposed_value is None:
+            src.storage._transposed_value = value.view(-1, 1).index_select(0, csr2csc).view(-1)
+            transposed_value = src.storage._transposed_value
+
+    return torch.ops.torch_sparse.spmm_sum_with_cached_transposed(row, rowptr, col, value, colptr, 
+                                                        transposed_row, transposed_value, other)
+
+# new function to implement a single SPMM without backward function
+def spmm_sum_without_backward(rowptr, col, value, other, out) -> torch.Tensor:
+    return torch.ops.torch_sparse.spmm_sum_without_backward(rowptr, col, value, other, out)
 
 def spmm_add(src: SparseTensor, other: torch.Tensor) -> torch.Tensor:
     return spmm_sum(src, other)
-
 
 def spmm_mean(src: SparseTensor, other: torch.Tensor) -> torch.Tensor:
     rowptr, col, value = src.csr()
@@ -88,6 +121,19 @@ def spmm(src: SparseTensor, other: torch.Tensor,
     else:
         raise ValueError
 
+# new function to cache the transposed src
+def spmm_with_cached_transposed(src: SparseTensor, other: torch.Tensor,
+         reduce: str = "sum") -> torch.Tensor:
+    if reduce == 'sum' or reduce == 'add':
+        return spmm_sum_with_cached_transposed(src, other)
+    elif reduce == 'mean':
+        return spmm_mean(src, other)
+    elif reduce == 'min':
+        return spmm_min(src, other)[0]
+    elif reduce == 'max':
+        return spmm_max(src, other)[0]
+    else:
+        raise ValueError
 
 def spspmm_sum(src: SparseTensor, other: SparseTensor) -> SparseTensor:
     assert src.sparse_size(1) == other.sparse_size(0)
@@ -140,6 +186,13 @@ def matmul(src, other, reduce="sum"):  # noqa: F811
         return spspmm(src, other, reduce)
     raise ValueError
 
+# new function to cache the transposed src
+def matmul_with_cached_transposed(src, other, reduce="sum"):  # noqa: F811
+    if isinstance(other, torch.Tensor):
+        return spmm_with_cached_transposed(src, other, reduce)
+    elif isinstance(other, SparseTensor):
+        return spspmm(src, other, reduce)
+    raise ValueError
 
 SparseTensor.spmm = lambda self, other, reduce="sum": spmm(self, other, reduce)
 SparseTensor.spspmm = lambda self, other, reduce="sum": spspmm(

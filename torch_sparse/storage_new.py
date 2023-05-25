@@ -29,26 +29,29 @@ class SparseStorage(object):
     _colcount: Optional[torch.Tensor]
     _csr2csc: Optional[torch.Tensor]
     _csc2csr: Optional[torch.Tensor]
-    _row_T: Optional[torch.Tensor]
-    _value_T: Optional[torch.Tensor]
 
-    def __init__(
-        self,
-        row: Optional[torch.Tensor] = None,
-        rowptr: Optional[torch.Tensor] = None,
-        col: Optional[torch.Tensor] = None,
-        value: Optional[torch.Tensor] = None,
-        sparse_sizes: Optional[Tuple[Optional[int], Optional[int]]] = None,
-        rowcount: Optional[torch.Tensor] = None,
-        colptr: Optional[torch.Tensor] = None,
-        colcount: Optional[torch.Tensor] = None,
-        csr2csc: Optional[torch.Tensor] = None,
-        csc2csr: Optional[torch.Tensor] = None,
-        is_sorted: bool = False,
-        trust_data: bool = False,
-        row_T: Optional[torch.Tensor] = None,
-        value_T: Optional[torch.Tensor] = None,
-    ):
+    # new data format
+    _transposed_row: Optional[torch.Tensor]
+    _transposed_value: Optional[torch.Tensor]
+
+    def __init__(self, row: Optional[torch.Tensor] = None,
+                 rowptr: Optional[torch.Tensor] = None,
+                 col: Optional[torch.Tensor] = None,
+                 value: Optional[torch.Tensor] = None,
+                 sparse_sizes: Optional[Tuple[Optional[int],
+                                              Optional[int]]] = None,
+                 rowcount: Optional[torch.Tensor] = None,
+                 colptr: Optional[torch.Tensor] = None,
+                 colcount: Optional[torch.Tensor] = None,
+                 csr2csc: Optional[torch.Tensor] = None,
+                 csc2csr: Optional[torch.Tensor] = None,
+                 is_sorted: bool = False,
+                 trust_data: bool = False, 
+                 
+                 # new data format
+                 transposed_row: Optional[torch.Tensor] = None,
+                 transposed_value: Optional[torch.Tensor] = None
+                 ):
 
         assert row is not None or rowptr is not None
         assert col is not None
@@ -149,6 +152,9 @@ class SparseStorage(object):
         self._csr2csc = csr2csc
         self._csc2csr = csc2csr
 
+        self._transposed_row = transposed_row
+        self._transposed_value = transposed_value
+
         if not is_sorted:
             idx = self._col.new_zeros(self._col.numel() + 1)
             idx[1:] = self.row()
@@ -163,9 +169,6 @@ class SparseStorage(object):
                 self._csr2csc = None
                 self._csc2csr = None
 
-        self._row_T = row_T
-        self._value_T = value_T
-
     @classmethod
     def empty(self):
         row = torch.tensor([], dtype=torch.long)
@@ -173,8 +176,9 @@ class SparseStorage(object):
         return SparseStorage(row=row, rowptr=None, col=col, value=None,
                              sparse_sizes=(0, 0), rowcount=None, colptr=None,
                              colcount=None, csr2csc=None, csc2csr=None,
-                             is_sorted=True, trust_data=True, 
-                             row_T=None, value_T= None)
+                             is_sorted=True, trust_data=True,
+                             # new data format
+                             transposed_row=None, transposed_value=None)
 
     def has_row(self) -> bool:
         return self._row is not None
@@ -251,9 +255,9 @@ class SparseStorage(object):
             csc2csr=self._csc2csr,
             is_sorted=True,
             trust_data=True,
-            row_T=self._row_T,
-            value_T=self._value_T,
-        )
+            # new data format
+            transposed_row=self._transposed_row,
+            transposed_value=self._transposed_value)
 
     def sparse_sizes(self) -> Tuple[int, int]:
         return self._sparse_sizes
@@ -304,9 +308,9 @@ class SparseStorage(object):
             csc2csr=self._csc2csr,
             is_sorted=True,
             trust_data=True,
-            row_T=self._row_T,
-            value_T=self._value_T,
-        )
+            # new data format
+            transposed_row=self._transposed_row,
+            transposed_value=self._transposed_value)
 
     def sparse_reshape(self, num_rows: int, num_cols: int):
         assert num_rows > 0 or num_rows == -1
@@ -329,22 +333,12 @@ class SparseStorage(object):
         col = idx % num_cols
         assert row.dtype == torch.long and col.dtype == torch.long
 
-        return SparseStorage(
-            row=row,
-            rowptr=None,
-            col=col,
-            value=self._value,
-            sparse_sizes=(num_rows, num_cols),
-            rowcount=None,
-            colptr=None,
-            colcount=None,
-            csr2csc=None,
-            csc2csr=None,
-            is_sorted=True,
-            trust_data=True,
-            row_T=None,
-            value_T=None,
-        )
+        return SparseStorage(row=row, rowptr=None, col=col, value=self._value,
+                             sparse_sizes=(num_rows, num_cols), rowcount=None,
+                             colptr=None, colcount=None, csr2csc=None,
+                             csc2csr=None, is_sorted=True, trust_data=True,
+                             # new data format
+                             transposed_row=None, transposed_value=None)
 
     def has_rowcount(self) -> bool:
         return self._rowcount is not None
@@ -419,28 +413,6 @@ class SparseStorage(object):
         self._csc2csr = csc2csr
         return csc2csr
 
-    def row_T(self) -> torch.Tensor:
-        row_T = self._row_T
-        if row_T is not None:
-            return row_T
-        row = self.row()
-        csr2csc = self.csr2csc()
-        row_T = row.index_select(0, csr2csc)
-        self._row_T = row_T
-        return row_T
-
-    def value_T(self) -> torch.Tensor:
-        value_T = self._value_T
-        if value_T is not None:
-            return value_T
-        value = self.value()
-        csr2csc = self.csr2csc()
-        assert value is not None
-        assert csr2csc is not None
-        value_T = value.view(-1, 1).index_select(0, csr2csc).view(-1)
-        self._value_T = value_T
-        return value_T
-
     def is_coalesced(self) -> bool:
         idx = self._col.new_full((self._col.numel() + 1, ), -1)
         idx[1:] = self._sparse_sizes[1] * self.row() + self._col
@@ -463,22 +435,12 @@ class SparseStorage(object):
             ptr = torch.cat([ptr, ptr.new_full((1, ), value.size(0))])
             value = segment_csr(value, ptr, reduce=reduce)
 
-        return SparseStorage(
-            row=row,
-            rowptr=None,
-            col=col,
-            value=value,
-            sparse_sizes=self._sparse_sizes,
-            rowcount=None,
-            colptr=None,
-            colcount=None,
-            csr2csc=None,
-            csc2csr=None,
-            is_sorted=True,
-            trust_data=True,
-            row_T=None,
-            value_T=None,
-        )
+        return SparseStorage(row=row, rowptr=None, col=col, value=value,
+                             sparse_sizes=self._sparse_sizes, rowcount=None,
+                             colptr=None, colcount=None, csr2csc=None,
+                             csc2csr=None, is_sorted=True, trust_data=True,
+                             # new data format
+                             transposed_row = None, transposed_value = None)
 
     def fill_cache_(self):
         self.row()
@@ -529,9 +491,9 @@ class SparseStorage(object):
             csc2csr=self._csc2csr,
             is_sorted=True,
             trust_data=True,
-            row_T=self._row_T,
-            value_T=self._value_T,
-        )
+            # new data format
+            transposed_row=self._transposed_row,
+            transposed_value=self._transposed_value)
 
     def clone(self):
         row = self._row
@@ -560,29 +522,21 @@ class SparseStorage(object):
         if csc2csr is not None:
             csc2csr = csc2csr.clone()
 
-        row_T = self._row_T
-        if row_T is not None:
-            row_T = row_T.clone()
-        value_T = self._value_T
-        if value_T is not None:
-            value_T = value_T.clone()
+        # new data format
+        transposed_row = self._transposed_row
+        if transposed_row is not None:
+            transposed_row = transposed_row.clone()
+        transposed_value = self._transposed_value
+        if transposed_value is not None:
+            transposed_value = transposed_value.clone()
 
-        return SparseStorage(
-            row=row,
-            rowptr=rowptr,
-            col=col,
-            value=value,
-            sparse_sizes=self._sparse_sizes,
-            rowcount=rowcount,
-            colptr=colptr,
-            colcount=colcount,
-            csr2csc=csr2csc,
-            csc2csr=csc2csr,
-            is_sorted=True,
-            trust_data=True,
-            row_T=row_T,
-            value_T=value_T,
-        )
+        return SparseStorage(row=row, rowptr=rowptr, col=col, value=value,
+                             sparse_sizes=self._sparse_sizes,
+                             rowcount=rowcount, colptr=colptr,
+                             colcount=colcount, csr2csc=csr2csc,
+                             csc2csr=csc2csr, is_sorted=True, trust_data=True,
+                             # new data format
+                             transposed_row=transposed_row, transposed_value=transposed_value)
 
     def type(self, dtype: torch.dtype, non_blocking: bool = False):
         value = self._value
@@ -591,7 +545,9 @@ class SparseStorage(object):
                 return self
             else:
                 return self.set_value(
-                    value.to(dtype=dtype, non_blocking=non_blocking),
+                    value.to(
+                        dtype=dtype,
+                        non_blocking=non_blocking),
                     layout='coo')
         else:
             return self
@@ -628,30 +584,21 @@ class SparseStorage(object):
         csc2csr = self._csc2csr
         if csc2csr is not None:
             csc2csr = csc2csr.to(device, non_blocking=non_blocking)
+        # new data format
+        transposed_row = self._transposed_row
+        if transposed_row is not None:
+            transposed_row = transposed_row.to(device, non_blocking=non_blocking)
+        transposed_value = self._transposed_value
+        if transposed_value is not None:
+            transposed_value = transposed_value.to(device, non_blocking=non_blocking)
 
-        row_T = self._row_T
-        if row_T is not None:
-            row_T = row_T.to(device, non_blocking=non_blocking)
-        value_T = self._value_T
-        if value_T is not None:
-            value_T = value_T.to(device, non_blocking=non_blocking)
-
-        return SparseStorage(
-            row=row,
-            rowptr=rowptr,
-            col=col,
-            value=value,
-            sparse_sizes=self._sparse_sizes,
-            rowcount=rowcount,
-            colptr=colptr,
-            colcount=colcount,
-            csr2csc=csr2csc,
-            csc2csr=csc2csr,
-            is_sorted=True,
-            trust_data=True,
-            row_T=row_T,
-            value_T=value_T,
-        )
+        return SparseStorage(row=row, rowptr=rowptr, col=col, value=value,
+                             sparse_sizes=self._sparse_sizes,
+                             rowcount=rowcount, colptr=colptr,
+                             colcount=colcount, csr2csc=csr2csc,
+                             csc2csr=csc2csr, is_sorted=True, trust_data=True,
+                             # new data format
+                             transposed_row=transposed_row, transposed_value=transposed_value)
 
     def device_as(self, tensor: torch.Tensor, non_blocking: bool = False):
         return self.to_device(device=tensor.device, non_blocking=non_blocking)
@@ -685,30 +632,21 @@ class SparseStorage(object):
         csc2csr = self._csc2csr
         if csc2csr is not None:
             csc2csr = csc2csr.cuda()
+        # new data format
+        transposed_row = self._transposed_row
+        if transposed_row is not None:
+            transposed_row = transposed_row.cuda()
+        transposed_value = self._transposed_value
+        if transposed_value is not None:
+            transposed_value = transposed_value.cuda()
 
-        row_T = self._row_T
-        if row_T is not None:
-            row_T = row_T.cuda()
-        value_T = self._value_T
-        if value_T is not None:
-            value_T = value_T.cuda()
-
-        return SparseStorage(
-            row=row,
-            rowptr=rowptr,
-            col=new_col,
-            value=value,
-            sparse_sizes=self._sparse_sizes,
-            rowcount=rowcount,
-            colptr=colptr,
-            colcount=colcount,
-            csr2csc=csr2csc,
-            csc2csr=csc2csr,
-            is_sorted=True,
-            trust_data=True,
-            row_T=row_T,
-            value_T=value_T,
-        )
+        return SparseStorage(row=row, rowptr=rowptr, col=new_col, value=value,
+                             sparse_sizes=self._sparse_sizes,
+                             rowcount=rowcount, colptr=colptr,
+                             colcount=colcount, csr2csc=csr2csc,
+                             csc2csr=csc2csr, is_sorted=True, trust_data=True,
+                             # new data format
+                             transposed_row=transposed_row, transposed_value=transposed_value)
 
     def pin_memory(self):
         row = self._row
@@ -737,29 +675,20 @@ class SparseStorage(object):
         if csc2csr is not None:
             csc2csr = csc2csr.pin_memory()
 
-        row_T = self._row_T
-        if row_T is not None:
-            row_T = row_T.pin_memory()
-        value_T = self._value_T
-        if value_T is not None:
-            value_T = value_T.pin_memory()
+        # new data format
+        transposed_row = self._transposed_row
+        if transposed_row is not None:
+            transposed_row = transposed_row.pin_memory()
+        transposed_value = self._transposed_value
+        if transposed_value is not None:
+            transposed_value = transposed_value.pin_memory()
 
-        return SparseStorage(
-            row=row,
-            rowptr=rowptr,
-            col=col,
-            value=value,
-            sparse_sizes=self._sparse_sizes,
-            rowcount=rowcount,
-            colptr=colptr,
-            colcount=colcount,
-            csr2csc=csr2csc,
-            csc2csr=csc2csr,
-            is_sorted=True,
-            trust_data=True,
-            row_T=row_T,
-            value_T=value_T,
-        )
+        return SparseStorage(row=row, rowptr=rowptr, col=col, value=value,
+                             sparse_sizes=self._sparse_sizes,
+                             rowcount=rowcount, colptr=colptr,
+                             colcount=colcount, csr2csc=csr2csc,
+                             csc2csr=csc2csr, is_sorted=True, trust_data=True,
+                             transposed_row=transposed_row, transposed_value=transposed_value)
 
     def is_pinned(self) -> bool:
         is_pinned = True
@@ -788,13 +717,13 @@ class SparseStorage(object):
         csc2csr = self._csc2csr
         if csc2csr is not None:
             is_pinned = is_pinned and csc2csr.is_pinned()
-
-        row_T = self._row_T
-        if row_T is not None:
-            is_pinned = is_pinned and row_T.is_pinned()
-        value_T = self._value_T
-        if value_T is not None:
-            is_pinned = is_pinned and value_T.is_pinned()
+        # new data format
+        transposed_row = self._transposed_row
+        if transposed_row is not None:
+            is_pinned = is_pinned and transposed_row.is_pinned()
+        transposed_value = self._transposed_value
+        if transposed_value is not None:
+            is_pinned = is_pinned and transposed_value.is_pinned()
         return is_pinned
 
 
@@ -825,12 +754,13 @@ def share_memory_(self) -> SparseStorage:
     if csc2csr is not None:
         csc2csr.share_memory_()
 
-    row_T = self._row_T
-    if row_T is not None:
-        row_T.share_memory_()
-    value_T = self._value_T
-    if value_T is not None:
-        value_T.share_memory_()
+    # new data format
+    transposed_row = self._transposed_row
+    if transposed_row is not None:
+        transposed_row.share_memory_()
+    transposed_value = self._transposed_value
+    if transposed_value is not None:
+        transposed_value.share_memory_()
 
 
 def is_shared(self) -> bool:
@@ -860,13 +790,13 @@ def is_shared(self) -> bool:
     csc2csr = self._csc2csr
     if csc2csr is not None:
         is_shared = is_shared and csc2csr.is_shared()
-
-    row_T = self._row_T
-    if row_T is not None:
-        is_shared = is_shared and row_T.is_shared()
-    value_T = self._value_T
-    if value_T is not None:
-        is_shared = is_shared and value_T.is_shared()
+    # new data format
+    transposed_row = self._transposed_row
+    if transposed_row is not None:
+        is_shared = is_shared and transposed_row.is_shared()
+    transposed_value = self._transposed_value
+    if transposed_value is not None:
+        is_shared = is_shared and transposed_value.is_shared()
     return is_shared
 
 

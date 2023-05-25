@@ -50,6 +50,13 @@ from .add import add, add_, add_nnz, add_nnz_  # noqa
 from .mul import mul, mul_, mul_nnz, mul_nnz_  # noqa
 from .reduce import sum, mean, min, max  # noqa
 from .matmul import matmul  # noqa
+
+# new method for matmul_with_cached_transposed
+from .matmul import matmul_with_cached_transposed
+
+# new spmm_sum without backward function
+from .matmul import spmm_sum_without_backward
+
 from .cat import cat  # noqa
 from .rw import random_walk  # noqa
 from .metis import partition  # noqa
