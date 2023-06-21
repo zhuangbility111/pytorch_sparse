@@ -118,7 +118,8 @@ class SPMMSum_without_backward : public torch::autograd::Function<SPMMSum_withou
 public:
   static variable_list forward(AutogradContext *ctx,
                                Variable rowptr, Variable col, Variable value,
-                               Variable mat, Variable out, bool has_value) {
+                               Variable mat, Variable out, bool has_value, 
+                               Variable row_split, Variable col_split) {
 
     torch::optional<torch::Tensor> opt_value = torch::nullopt;
     if (has_value)
@@ -126,7 +127,7 @@ public:
 
     // auto out = std::get<0>(spmm_fw(rowptr, col, opt_value, mat, "sum"));
 	// auto out = std::get<0>(spmm_cpu_optimized_no_tile_v1(rowptr, col, opt_value, mat, rowptr.size(0)-1, "sum"));
-	std::get<0>(spmm_cpu_optimized_no_tile_v1(rowptr, col, opt_value, mat, out, rowptr.size(0)-1, "sum"));
+	std::get<0>(spmm_cpu_optimized_no_tile_v1(rowptr, col, opt_value, mat, out, rowptr.size(0)-1, "sum", row_split, col_split));
     return {out};
   }
 
@@ -340,9 +341,10 @@ SPARSE_API torch::Tensor spmm_sum(torch::optional<torch::Tensor> opt_row,
 SPARSE_API torch::Tensor spmm_sum_without_backward(
                        torch::Tensor rowptr, torch::Tensor col,
                        torch::optional<torch::Tensor> opt_value,
-                       torch::Tensor mat, torch::Tensor out) {
+                       torch::Tensor mat, torch::Tensor out,
+                       torch::Tensor row_splits, torch::Tensor col_splits) {
   auto value = opt_value.has_value() ? opt_value.value() : col;
-  return SPMMSum_without_backward::apply(rowptr, col, value, mat, out, opt_value.has_value())[0];
+  return SPMMSum_without_backward::apply(rowptr, col, value, mat, out, opt_value.has_value(), row_splits, col_splits)[0];
 }
 
 SPARSE_API torch::Tensor spmm_mean(torch::optional<torch::Tensor> opt_row,

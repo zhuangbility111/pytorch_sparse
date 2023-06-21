@@ -16,6 +16,8 @@
     #define VEC_LEN 16
 #endif
 
+// #define PROFILE 1
+
 using namespace std::chrono;
 
 // typedef void (*inner_kernel)(int, float *, float *, float *, int);
@@ -290,9 +292,12 @@ std::tuple<torch::Tensor, torch::optional<torch::Tensor>>
 spmm_cpu_optimized_no_tile_v1(torch::Tensor rowptr, torch::Tensor col, 
 				   		   	  torch::optional<torch::Tensor> optional_value, torch::Tensor mat,
 							  torch::Tensor out,
-				   		   	  int64_t sparse_rows, std::string reduce) {
+				   		   	  int64_t sparse_rows, std::string reduce,
+							  torch::Tensor parallel_row_split, torch::Tensor parallel_col_split) {
 
-	// auto other_start_time = system_clock::now();
+#ifdef PROFILE
+	auto other_start_time = system_clock::now();
+#endif
 	// check sparse matrix ptr
 	CHECK_CPU(rowptr);
 	CHECK_CPU(col);
@@ -317,12 +322,13 @@ spmm_cpu_optimized_no_tile_v1(torch::Tensor rowptr, torch::Tensor col,
 	sizes[mat.dim() - 2] = sparse_rows;
 	// auto out = torch::zeros(sizes, mat.options());
 	
-	auto other_start_time = system_clock::now();
+#ifdef PROFILE
+	// auto other_start_time = system_clock::now();
 	// use empty to accelerate the process of allocating memory 
 	// auto out = torch::empty(sizes, mat.options());
 	duration<double, std::milli> diff_other = (system_clock::now() - other_start_time);
 	std::cout << "elapsed time of allocating memory " << "(spmm on forward): " << diff_other.count() << std::endl;	
-
+#endif
 
 	auto rowptr_data = rowptr.data_ptr<int64_t>();
 	auto col_data = col.data_ptr<int64_t>();
@@ -334,11 +340,6 @@ spmm_cpu_optimized_no_tile_v1(torch::Tensor rowptr, torch::Tensor col,
 	int M = (int)(sparse_rows);
 	int dense_batch_size = (int)(mat.numel()) / (K * N);
 	// int64_t sparse_cols = dense_rows;
-
-/*
-	int K = static_cast<int>(sparse_cols);
-	int N = static_cast<int>(dense_cols);
-*/
 
 	if (mat.scalar_type() == at::ScalarType::Float && 
 		optional_value.value().scalar_type() == at::ScalarType::Float) {
@@ -357,25 +358,28 @@ spmm_cpu_optimized_no_tile_v1(torch::Tensor rowptr, torch::Tensor col,
 		int num_threads_on_vertexs = max_num_threads;
 		int num_threads_on_features = 1;
 
-		int work_range_on_vertexs[num_threads_on_vertexs + 1];
-		int work_range_on_features[num_threads_on_features + 1];
-		// int* work_range_on_vertexs = (int*)malloc(sizeof(int) * (num_threads_on_vertexs + 1));
-		// int* work_range_on_features = (int*)malloc(sizeof(int) * (num_threads_on_features + 1));
-
-		// double elapsed_time_array[num_threads_on_vertexs];
-		
 	 	// auto start_time_1 = system_clock::now();
 		// divide work
-		divide_work(work_range_on_vertexs, M, num_threads_on_vertexs);
-		divide_work(work_range_on_features, N, num_threads_on_features);
-		// duration<double, std::milli> diff = (system_clock::now() - start_time_1);
-		// std::cout << "elapsed time of dividing work(spmm on forward): " << diff.count() << std::endl;
-		// duration<double, std::milli> diff_other = (system_clock::now() - other_start_time);
-		// std::cout << "elapsed time of other part " << "(spmm on forward): " << diff_other.count() << std::endl;	
-	// duration<double, std::milli> diff_other = (system_clock::now() - other_start_time);
-	// std::cout << "elapsed time of other part " << "(spmm on forward): " << diff_other.count() << std::endl;	
+		int* work_range_on_vertexs = parallel_row_split.data_ptr<int>();
+		int* work_range_on_features = parallel_col_split.data_ptr<int>();
 
+		// if the work partition is pre-defined, we can reuse it
+		// else divide the work by the number of threads directly.
+		if (work_range_on_vertexs == nullptr) {
+			printf("divide work dynamically\n");
+			work_range_on_vertexs = new int[num_threads_on_vertexs + 1];
+			divide_work(work_range_on_vertexs, M, num_threads_on_vertexs);
+		}
+
+		if (work_range_on_features == nullptr) {
+			printf("divide work dynamically\n");
+			work_range_on_features = new int[num_threads_on_features + 1];
+			divide_work(work_range_on_features, N, num_threads_on_features);
+		}
+
+#ifdef PROFILE
 		auto start_time = system_clock::now();
+#endif
 		#pragma omp parallel 
 		{
 			// auto start_time = system_clock::now();
@@ -436,10 +440,12 @@ spmm_cpu_optimized_no_tile_v1(torch::Tensor rowptr, torch::Tensor col,
 				elapsed_time_array[tid] = diff1.count();
 				*/
 		}
+#ifdef PROFILE
 		duration<double, std::milli> diff1 = (system_clock::now() - start_time);
 		std::cout << "elapsed time of no tile's kernel = " << diff1.count() << "ms" << std::endl;	
   		duration<double, std::milli> diff3 = (system_clock::now() - other_start_time);
   		std::cout << "elapsed time of no tile's spmm:" << diff3.count() << std::endl;
+#endif
 /*
 		for (int i = 0; i < num_threads_on_vertexs; i++) {
 			std::cout << "elapsed time of thread " << i << "(spmm on forward): " << elapsed_time_array[i] << std::endl;	

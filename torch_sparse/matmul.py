@@ -58,8 +58,8 @@ def spmm_sum_with_cached_transposed(src: SparseTensor, other: torch.Tensor) -> t
                                                         transposed_row, transposed_value, other)
 
 # new function to implement a single SPMM without backward function
-def spmm_sum_without_backward(rowptr, col, value, other, out) -> torch.Tensor:
-    return torch.ops.torch_sparse.spmm_sum_without_backward(rowptr, col, value, other, out)
+def spmm_sum_without_backward(rowptr, col, value, other, out, row_splits=None, col_splits=None) -> torch.Tensor:
+    return torch.ops.torch_sparse.spmm_sum_without_backward(rowptr, col, value, other, out, row_splits, col_splits)
 
 def spmm_add(src: SparseTensor, other: torch.Tensor) -> torch.Tensor:
     return spmm_sum(src, other)
