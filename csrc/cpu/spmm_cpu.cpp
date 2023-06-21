@@ -8,19 +8,127 @@
 #include <chrono> 
 #include <algorithm>
 
-#ifdef __ARM_FEATURE_SVE /* __ARM_FEATURE_SVE */
-	#include <arm_sve.h>
-	#define VEC_LEN 16
-#elif __AVX512F__ /* AVX512 */
-    #include <immintrin.h>
-    #define VEC_LEN 16
-#endif
-
 // #define PROFILE 1
 
 using namespace std::chrono;
 
 // typedef void (*inner_kernel)(int, float *, float *, float *, int);
+#ifdef __ARM_FEATURE_SVE /* __ARM_FEATURE_SVE */
+#include <arm_sve.h>
+#define VEC_LEN 16
+
+using Inner_kernel = void(*)(int64_t*, float*, float*, float*,
+							 int, int, int, int, int,
+							 svbool_t&, svbool_t&, svbool_t&, svbool_t&);
+
+template <int N>
+void kernel_1xN(int64_t* col, float* value, float* mat, float* out, 
+				int m, int n, int ldb, int start_on_cols, int end_on_cols,
+				svbool_t& pg0, svbool_t& pg1, svbool_t& pg2, svbool_t& pg3) {
+	svfloat32_t vout0, vout1, vout2, vout3;
+	svfloat32_t va;
+	svfloat32_t vb0, vb1, vb2, vb3;
+	int out_idx = m*ldb + n;
+	// load output to SVE register
+	/*
+	if (N > 0)
+		vout0 = svdup_n_f32(0.0);
+	if (N > 1)
+		vout1 = svdup_n_f32(0.0);
+	if (N > 2)
+		vout2 = svdup_n_f32(0.0);
+	if (N > 3)
+		vout3 = svdup_n_f32(0.0);
+	*/
+	if (N > 0)
+		vout0 = svld1(pg0, &(out[out_idx]));
+	if (N > 1)
+		vout1 = svld1(pg1, &(out[out_idx + VEC_LEN]));
+	if (N > 2)
+		vout2 = svld1(pg2, &(out[out_idx + 2 * VEC_LEN]));
+	if (N > 3)
+		vout3 = svld1(pg3, &(out[out_idx + 3 * VEC_LEN]));
+
+				/*
+				for (int n = start_on_N; n < end_on_N; n += VEC_LEN) {
+					svbool_t pg = svwhilelt_b32(n, end_on_N);
+					// svfloat32_t vout = svld1(pg, &(out_data[m*N + n]));
+					svfloat32_t vout = svdup_n_f32(0.0);
+
+					for (int id_on_cols = start_on_cols; id_on_cols < end_on_cols; id_on_cols++) {
+						int k = col_data[id_on_cols];
+						// float value = value_data[id_on_cols];
+						// out_data[m*N + n] += value * mat_data[k*N + n];
+						svfloat32_t va = svdup_n_f32(value_data[id_on_cols]);
+						svfloat32_t vb = svld1(pg, &(mat_data[k*N + n]));
+						vout = svmla_f32_x(pg, vout, va, vb);
+					}
+					svst1(pg, &(out_data[m*N + n]), vout);
+				}
+				*/
+
+	for (int id_on_cols = start_on_cols; id_on_cols < end_on_cols; id_on_cols++) {
+		int k = col[id_on_cols];
+		int b_idx = k*ldb + n;
+		// load elem on sparse matrix
+		va = svdup_n_f32(value[id_on_cols]);
+		// load elems on dense matrix based on the value of N
+		if (N > 0)
+			vb0 = svld1(pg0, &(mat[b_idx]));
+		if (N > 1)
+			vb1 = svld1(pg1, &(mat[b_idx + VEC_LEN]));
+		if (N > 2)
+			vb2 = svld1(pg2, &(mat[b_idx + 2 * VEC_LEN]));
+		if (N > 3)
+			vb3 = svld1(pg3, &(mat[b_idx + 3 * VEC_LEN]));
+
+		// fma based on the value of N
+		if (N > 0)
+			vout0 = svmla_f32_x(pg0, vout0, va, vb0);
+		if (N > 1)
+			vout1 = svmla_f32_x(pg1, vout1, va, vb1);
+		if (N > 2)
+			vout2 = svmla_f32_x(pg2, vout2, va, vb2);
+		if (N > 3)
+			vout3 = svmla_f32_x(pg3, vout3, va, vb3);
+	}
+
+	// store output from SVE register
+	if (N > 0)
+		svst1(pg0, &(out[out_idx]), vout0);
+	if (N > 1)
+		svst1(pg1, &(out[out_idx + VEC_LEN]), vout1);
+	if (N > 2)
+		svst1(pg2, &(out[out_idx + 2 * VEC_LEN]), vout2);
+	if (N > 3)
+		svst1(pg3, &(out[out_idx + 3 * VEC_LEN]), vout3);
+}
+
+Inner_kernel select_kernel(const int N, int& step, 
+						   svbool_t& pg0, svbool_t& pg1, svbool_t& pg2, svbool_t& pg3) {
+	Inner_kernel kernel = nullptr;
+	if (N > 3 * VEC_LEN) {
+		kernel = get_kernel_1xN(4);
+		pg3 = svwhilelt_b32(3 * VEC_LEN, N);
+		step = std::min(N, 4 * VEC_LEN);
+	} else if (N > 2 * VEC_LEN) {
+		kernel = get_kernel_1xN(3);
+		pg2 = svwhilelt_b32(2 * VEC_LEN, N);
+		step = N;
+	} else if (N > 1 * VEC_LEN) {
+		kernel = get_kernel_1xN(2);
+		pg1 = svwhilelt_b32(1 * VEC_LEN, N);
+		step = N;
+	} else if (N > 0) {
+		kernel = get_kernel_1xN(1);
+		pg0 = svwhilelt_b32(0 * VEC_LEN, N);
+		step = N;
+	}
+	return kernel;
+}
+#elif __AVX512F__ /* AVX512 */
+#include <immintrin.h>
+#define VEC_LEN 16
 using Inner_kernel = void(*)(int64_t*, float*, float*, float*,
 							 int, int, int, int, int,
 							 __mmask16&, __mmask16&, __mmask16&, __mmask16&);
@@ -106,6 +214,33 @@ void kernel_1xN(int64_t* col, float* value, float* mat, float* out,
         _mm512_mask_storeu_ps(&(out[out_idx + 3 * VEC_LEN]), pg3, vout3);
     }
 }
+
+Inner_kernel select_kernel(const int N, int& step, 
+						   __mmask16& pg0, __mmask16& pg1, __mmask16& pg2, __mmask16& pg3) {
+	Inner_kernel kernel = nullptr;
+    if (N > 4 * VEC_LEN) { // (4 * VEC_LEN, +inf)
+        kernel = get_kernel_1xN(4);
+        step = 4 * VEC_LEN;
+    } else if (N > 3 * VEC_LEN && N <= 4 * VEC_LEN) { // (3 * VEC_LEN, 4 * VEC_LEN]
+		kernel = get_kernel_1xN(4);
+        pg3 = static_cast<__mmask16>((1 << (N - 3 * VEC_LEN)) - 1);
+        step = N;
+	} else if (N > 2 * VEC_LEN && N <= 3 * VEC_LEN) { // (2 * VEC_LEN, 3 * VEC_LEN]
+		kernel = get_kernel_1xN(3);
+        pg2 = static_cast<__mmask16>((1 << (N - 2 * VEC_LEN)) - 1);
+		step = N;
+	} else if (N > 1 * VEC_LEN && N <= 2 * VEC_LEN) { // (1 * VEC_LEN, 2 * VEC_LEN]
+		kernel = get_kernel_1xN(2);
+        pg1 = static_cast<__mmask16>((1 << (N - 1 * VEC_LEN)) - 1);
+		step = N;
+	} else if (N > 0 && N <= 1 * VEC_LEN) { // (0, 1 * VEC_LEN]
+		kernel = get_kernel_1xN(1);
+        pg0 = static_cast<__mmask16>((1 << N) - 1);
+		step = N;
+	}
+	return kernel;
+}
+#endif
 
 Inner_kernel get_kernel_1xN(int n) {
 	if (n == 1)
@@ -262,32 +397,6 @@ int obtain_tile_rowptr(int64_t* rowptr, int64_t* col, float* values,
 	return 1;
 }
 
-Inner_kernel select_kernel(const int N, int& step, 
-						   __mmask16& pg0, __mmask16& pg1, __mmask16& pg2, __mmask16& pg3) {
-	Inner_kernel kernel = nullptr;
-    if (N > 4 * VEC_LEN) { // (4 * VEC_LEN, +inf)
-        kernel = get_kernel_1xN(4);
-        step = 4 * VEC_LEN;
-    } else if (N > 3 * VEC_LEN && N <= 4 * VEC_LEN) { // (3 * VEC_LEN, 4 * VEC_LEN]
-		kernel = get_kernel_1xN(4);
-        pg3 = static_cast<__mmask16>((1 << (N - 3 * VEC_LEN)) - 1);
-        step = N;
-	} else if (N > 2 * VEC_LEN && N <= 3 * VEC_LEN) { // (2 * VEC_LEN, 3 * VEC_LEN]
-		kernel = get_kernel_1xN(3);
-        pg2 = static_cast<__mmask16>((1 << (N - 2 * VEC_LEN)) - 1);
-		step = N;
-	} else if (N > 1 * VEC_LEN && N <= 2 * VEC_LEN) { // (1 * VEC_LEN, 2 * VEC_LEN]
-		kernel = get_kernel_1xN(2);
-        pg1 = static_cast<__mmask16>((1 << (N - 1 * VEC_LEN)) - 1);
-		step = N;
-	} else if (N > 0 && N <= 1 * VEC_LEN) { // (0, 1 * VEC_LEN]
-		kernel = get_kernel_1xN(1);
-        pg0 = static_cast<__mmask16>((1 << N) - 1);
-		step = N;
-	}
-	return kernel;
-}
-
 std::tuple<torch::Tensor, torch::optional<torch::Tensor>>
 spmm_cpu_optimized_no_tile_v1(torch::Tensor rowptr, torch::Tensor col, 
 				   		   	  torch::optional<torch::Tensor> optional_value, torch::Tensor mat,
@@ -394,7 +503,18 @@ spmm_cpu_optimized_no_tile_v1(torch::Tensor rowptr, torch::Tensor col,
 			int end_on_N = work_range_on_features[tid_on_features + 1];
 			int step_on_N = end_on_N - start_on_N;
 
-            // set mask register to all true
+#ifdef __ARM_FEATURE_SVE /* __ARM_FEATURE_SVE */
+			svbool_t pg0_main = svptrue_b32();
+			svbool_t pg1_main = svptrue_b32();
+			svbool_t pg2_main = svptrue_b32();
+			svbool_t pg3_main = svptrue_b32();
+
+			svbool_t pg0_corner = svptrue_b32();
+			svbool_t pg1_corner = svptrue_b32();
+			svbool_t pg2_corner = svptrue_b32();
+			svbool_t pg3_corner = svptrue_b32();
+#elif __AVX512F__ /* AVX512 */
+			// set mask register to all true
 			__mmask16 pg0_main = static_cast<__mmask16>(0xFFFF);
 			__mmask16 pg1_main = static_cast<__mmask16>(0xFFFF);
 			__mmask16 pg2_main = static_cast<__mmask16>(0xFFFF);
@@ -404,6 +524,7 @@ spmm_cpu_optimized_no_tile_v1(torch::Tensor rowptr, torch::Tensor col,
 			__mmask16 pg1_corner = static_cast<__mmask16>(0xFFFF);
 			__mmask16 pg2_corner = static_cast<__mmask16>(0xFFFF);
 			__mmask16 pg3_corner = static_cast<__mmask16>(0xFFFF);
+#endif
 
 			// select kernel
 			int step_main_kernel = 0, step_corner_kernel = 0;

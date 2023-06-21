@@ -99,9 +99,6 @@ def get_extensions():
         if suffix == 'cuda' and osp.exists(path):
             sources += [path]
 
-        # add compile flag to support AVX512 for Intel
-        extra_compile_args['cxx'] += ['-mavx512f', '-mavx512cd', '-mavx512bw', '-mavx512dq', '-mavx512vl', '-mavx512ifma', '-mavx512vbmi']
-
         Extension = CppExtension if suffix == 'cpu' else CUDAExtension
         extension = Extension(
             f'torch_sparse._{name}_{suffix}',
