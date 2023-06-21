@@ -38,6 +38,13 @@ class SparseTensor(object):
             trust_data=trust_data,
         )
 
+        # These attributes are used for parallel SPMM
+        self.row_splits = torch.tensor([], dtype=torch.int32)
+        self.col_splits = torch.tensor([], dtype=torch.int32)
+        self.row_splits_for_transpose = torch.tensor([], dtype=torch.int32)
+        self.col_splits_for_transpose = torch.tensor([], dtype=torch.int32)
+        
+
     @classmethod
     def from_storage(self, storage: SparseStorage):
         out = SparseTensor(
@@ -103,6 +110,7 @@ class SparseTensor(object):
                             sparse_sizes=(mat.size(0), mat.size(1)),
                             is_sorted=True, trust_data=True)
 
+    '''
     @classmethod
     def from_torch_sparse_csr_tensor(self, mat: torch.Tensor,
                                      has_value: bool = True):
@@ -116,6 +124,7 @@ class SparseTensor(object):
         return SparseTensor(row=None, rowptr=rowptr, col=col, value=value,
                             sparse_sizes=(mat.size(0), mat.size(1)),
                             is_sorted=True, trust_data=True)
+    '''
 
     @classmethod
     def eye(self, M: int, N: Optional[int] = None, has_value: bool = True,
@@ -271,6 +280,20 @@ class SparseTensor(object):
         if valueA is None and valueB is None:
             return True
         return torch.equal(valueA, valueB)
+
+    def get_work_range(self):
+        return self.row_splits, self.col_splits
+
+    def set_work_range(self, row_splits: torch.Tensor, col_splits: torch.Tensor):
+        self.row_splits = row_splits
+        self.col_splits = col_splits
+
+    def get_work_range_for_transpose(self):
+        return self.row_splits_for_transpose, self.col_splits_for_transpose
+
+    def set_work_range_for_transpose(self, row_splits: torch.Tensor, col_splits: torch.Tensor):
+        self.row_splits_for_transpose = row_splits
+        self.col_splits_for_transpose = col_splits
 
     # Utility functions #######################################################
 
@@ -501,6 +524,7 @@ class SparseTensor(object):
 
         return torch.sparse_coo_tensor(index, value, self.sizes())
 
+    '''
     def to_torch_sparse_csr_tensor(
             self, dtype: Optional[int] = None) -> torch.Tensor:
         rowptr, col, value = self.csr()
@@ -509,7 +533,7 @@ class SparseTensor(object):
             value = torch.ones(self.nnz(), dtype=dtype, device=self.device())
 
         return torch.sparse_csr_tensor(rowptr, col, value, self.sizes())
-
+    '''
 
 # Python Bindings #############################################################
 
@@ -592,7 +616,6 @@ def __getitem__(self: SparseTensor, index: Any) -> SparseTensor:
             raise SyntaxError
 
     return out
-
 
 def __repr__(self: SparseTensor) -> str:
     i = ' ' * 6
