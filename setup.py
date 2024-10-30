@@ -99,6 +99,8 @@ def get_extensions():
         if suffix == 'cuda' and osp.exists(path):
             sources += [path]
 
+        extra_compile_args['cxx'] += ['-Kopenmp', '-Kfast', '-O3', '-Nlibomp', '-Nclang']
+
         Extension = CppExtension if suffix == 'cpu' else CUDAExtension
         extension = Extension(
             f'torch_sparse._{name}_{suffix}',

@@ -104,28 +104,6 @@ void kernel_1xN(int64_t* col, float* value, float* mat, float* out,
 		svst1(pg3, &(out[out_idx + 3 * VEC_LEN]), vout3);
 }
 
-Inner_kernel select_kernel(const int N, int& step, 
-						   svbool_t& pg0, svbool_t& pg1, svbool_t& pg2, svbool_t& pg3) {
-	Inner_kernel kernel = nullptr;
-	if (N > 3 * VEC_LEN) {
-		kernel = get_kernel_1xN(4);
-		pg3 = svwhilelt_b32(3 * VEC_LEN, N);
-		step = std::min(N, 4 * VEC_LEN);
-	} else if (N > 2 * VEC_LEN) {
-		kernel = get_kernel_1xN(3);
-		pg2 = svwhilelt_b32(2 * VEC_LEN, N);
-		step = N;
-	} else if (N > 1 * VEC_LEN) {
-		kernel = get_kernel_1xN(2);
-		pg1 = svwhilelt_b32(1 * VEC_LEN, N);
-		step = N;
-	} else if (N > 0) {
-		kernel = get_kernel_1xN(1);
-		pg0 = svwhilelt_b32(0 * VEC_LEN, N);
-		step = N;
-	}
-	return kernel;
-}
 #elif __AVX512F__ /* AVX512 */
 #include <immintrin.h>
 #define VEC_LEN 16
@@ -215,31 +193,6 @@ void kernel_1xN(int64_t* col, float* value, float* mat, float* out,
     }
 }
 
-Inner_kernel select_kernel(const int N, int& step, 
-						   __mmask16& pg0, __mmask16& pg1, __mmask16& pg2, __mmask16& pg3) {
-	Inner_kernel kernel = nullptr;
-    if (N > 4 * VEC_LEN) { // (4 * VEC_LEN, +inf)
-        kernel = get_kernel_1xN(4);
-        step = 4 * VEC_LEN;
-    } else if (N > 3 * VEC_LEN && N <= 4 * VEC_LEN) { // (3 * VEC_LEN, 4 * VEC_LEN]
-		kernel = get_kernel_1xN(4);
-        pg3 = static_cast<__mmask16>((1 << (N - 3 * VEC_LEN)) - 1);
-        step = N;
-	} else if (N > 2 * VEC_LEN && N <= 3 * VEC_LEN) { // (2 * VEC_LEN, 3 * VEC_LEN]
-		kernel = get_kernel_1xN(3);
-        pg2 = static_cast<__mmask16>((1 << (N - 2 * VEC_LEN)) - 1);
-		step = N;
-	} else if (N > 1 * VEC_LEN && N <= 2 * VEC_LEN) { // (1 * VEC_LEN, 2 * VEC_LEN]
-		kernel = get_kernel_1xN(2);
-        pg1 = static_cast<__mmask16>((1 << (N - 1 * VEC_LEN)) - 1);
-		step = N;
-	} else if (N > 0 && N <= 1 * VEC_LEN) { // (0, 1 * VEC_LEN]
-		kernel = get_kernel_1xN(1);
-        pg0 = static_cast<__mmask16>((1 << N) - 1);
-		step = N;
-	}
-	return kernel;
-}
 #endif
 
 Inner_kernel get_kernel_1xN(int n) {
@@ -396,6 +349,57 @@ int obtain_tile_rowptr(int64_t* rowptr, int64_t* col, float* values,
 	}
 	return 1;
 }
+
+#ifdef __ARM_FEATURE_SVE /* __ARM_FEATURE_SVE */
+Inner_kernel select_kernel(const int N, int& step, 
+						   svbool_t& pg0, svbool_t& pg1, svbool_t& pg2, svbool_t& pg3) {
+	Inner_kernel kernel = nullptr;
+	if (N > 3 * VEC_LEN) {
+		kernel = get_kernel_1xN(4);
+		pg3 = svwhilelt_b32(3 * VEC_LEN, N);
+		step = std::min(N, 4 * VEC_LEN);
+	} else if (N > 2 * VEC_LEN) {
+		kernel = get_kernel_1xN(3);
+		pg2 = svwhilelt_b32(2 * VEC_LEN, N);
+		step = N;
+	} else if (N > 1 * VEC_LEN) {
+		kernel = get_kernel_1xN(2);
+		pg1 = svwhilelt_b32(1 * VEC_LEN, N);
+		step = N;
+	} else if (N > 0) {
+		kernel = get_kernel_1xN(1);
+		pg0 = svwhilelt_b32(0 * VEC_LEN, N);
+		step = N;
+	}
+	return kernel;
+}
+#elif __AVX512F__ /* AVX512 */
+Inner_kernel select_kernel(const int N, int& step, 
+						   __mmask16& pg0, __mmask16& pg1, __mmask16& pg2, __mmask16& pg3) {
+	Inner_kernel kernel = nullptr;
+    if (N > 4 * VEC_LEN) { // (4 * VEC_LEN, +inf)
+        kernel = get_kernel_1xN(4);
+        step = 4 * VEC_LEN;
+    } else if (N > 3 * VEC_LEN && N <= 4 * VEC_LEN) { // (3 * VEC_LEN, 4 * VEC_LEN]
+		kernel = get_kernel_1xN(4);
+        pg3 = static_cast<__mmask16>((1 << (N - 3 * VEC_LEN)) - 1);
+        step = N;
+	} else if (N > 2 * VEC_LEN && N <= 3 * VEC_LEN) { // (2 * VEC_LEN, 3 * VEC_LEN]
+		kernel = get_kernel_1xN(3);
+        pg2 = static_cast<__mmask16>((1 << (N - 2 * VEC_LEN)) - 1);
+		step = N;
+	} else if (N > 1 * VEC_LEN && N <= 2 * VEC_LEN) { // (1 * VEC_LEN, 2 * VEC_LEN]
+		kernel = get_kernel_1xN(2);
+        pg1 = static_cast<__mmask16>((1 << (N - 1 * VEC_LEN)) - 1);
+		step = N;
+	} else if (N > 0 && N <= 1 * VEC_LEN) { // (0, 1 * VEC_LEN]
+		kernel = get_kernel_1xN(1);
+        pg0 = static_cast<__mmask16>((1 << N) - 1);
+		step = N;
+	}
+	return kernel;
+}
+#endif
 
 std::tuple<torch::Tensor, torch::optional<torch::Tensor>>
 spmm_cpu_optimized_no_tile_v1(torch::Tensor rowptr, torch::Tensor col, 
