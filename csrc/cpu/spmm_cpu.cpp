@@ -21,6 +21,8 @@ using Inner_kernel = void(*)(int64_t*, float*, float*, float*,
 							 int, int, int, int, int,
 							 svbool_t&, svbool_t&, svbool_t&, svbool_t&);
 
+Inner_kernel get_kernel_1xN(int n);
+
 template <int N>
 void kernel_1xN(int64_t* col, float* value, float* mat, float* out, 
 				int m, int n, int ldb, int start_on_cols, int end_on_cols,
@@ -110,6 +112,8 @@ void kernel_1xN(int64_t* col, float* value, float* mat, float* out,
 using Inner_kernel = void(*)(int64_t*, float*, float*, float*,
 							 int, int, int, int, int,
 							 __mmask16&, __mmask16&, __mmask16&, __mmask16&);
+
+Inner_kernel get_kernel_1xN(int n);
 
 template <int N>
 void kernel_1xN(int64_t* col, float* value, float* mat, float* out, 
@@ -639,3 +643,4 @@ torch::Tensor spmm_value_bw_cpu(torch::Tensor row, torch::Tensor rowptr,
 
   return out;
 }
+
